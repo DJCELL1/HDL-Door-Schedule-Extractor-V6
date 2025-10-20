@@ -4,9 +4,7 @@ from suppliers.base import SupplierBase
 from suppliers.allegion import AllegionParser
 from suppliers.dormakaba import DormakabaParser
 from suppliers import ARA
-
 registry["ARA"] = ARA.extract_items
-
 from suppliers.jk import JKParser
 
 PARSERS = [ARAParser, AllegionParser, DormakabaParser, JKParser]
