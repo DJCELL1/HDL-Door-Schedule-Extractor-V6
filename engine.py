@@ -1,65 +1,144 @@
 from __future__ import annotations
-
+from dataclasses import dataclass
 from typing import List, Optional
 import pdfplumber
 import io
 import re
 
-from models import ItemRow, DOOR_RE
 from utils.parsing import normalize_spaces, looks_like_table, best_area_name
 from utils.io_helpers import bytes_to_images
 from utils.ocr import ocr_page_to_text
-from suppliers import registry
+from suppliers.registry import get_supplier_parser
 
 
-def extract_text_from_pdf(data: bytes, force_ocr: bool = False) -> List[str]:
+# ---------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------
+@dataclass
+class ItemRow:
+    area: str
+    door: str
+    code: str
+    quantity: int
+    product: str
+    description: Optional[str] = None
+    colour: Optional[str] = None
+
+
+# ---------------------------------------------------------------------
+# Door number detection regex (generic fallback)
+# ---------------------------------------------------------------------
+DOOR_RE = re.compile(
+    r"""
+    \b(
+        [A-Z]{1,4}        # letters (e.g. ED, IS, D)
+        \d{2,4}           # digits (e.g. 01, 0202)
+        [A-Z]?            # optional suffix letter
+        (?:-\d{1,2})?     # optional dash-number
+        [A-Z]?            # optional trailing letter
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+# ---------------------------------------------------------------------
+# Core extraction logic
+# ---------------------------------------------------------------------
+def extract_text_from_pdf(data: bytes, force_ocr: bool = False) -> str:
     """
-    Extracts text from each page of a PDF.
-    Falls back to OCR for pages with little or no text.
+    Extract text from a PDF file.
+    Falls back to OCR (Tesseract) if no text layer is found or force_ocr=True.
     """
-    pages_text: List[str] = []
+    text_output = []
 
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
-            text = normalize_spaces(text)
-            use_ocr = force_ocr or len(text) < 30  # low-text pages trigger OCR
+            if force_ocr or not text.strip():
+                # Convert the page to an image for OCR fallback
+                image = bytes_to_images(data, page_numbers=[page.page_number - 1])[0]
+                text = ocr_page_to_text(image)
+            text_output.append(text)
 
-            if use_ocr:
-                images = bytes_to_images(
-                    data, first_page=page.page_number, last_page=page.page_number
-                )
-                if images:
-                    ocr_text = ocr_page_to_text(images[0])
-                    text = normalize_spaces(ocr_text)
-
-            pages_text.append(text)
-
-    return pages_text
+    return "\n".join(text_output)
 
 
-def parse_with_supplier(text_pages: List[str], supplier_hint: Optional[str] = None) -> List[ItemRow]:
+# ---------------------------------------------------------------------
+# Parse with supplier
+# ---------------------------------------------------------------------
+def parse_with_supplier(supplier_name: str, pdf_bytes: bytes) -> List[ItemRow]:
     """
-    Detects or uses a supplier parser and extracts ItemRow objects.
+    Use the correct supplier parser from the registry to extract structured data.
     """
-    parser = registry.get_parser(supplier_hint, text_pages)
-    rows = parser.parse(text_pages)
-    return rows
+    parser = get_supplier_parser(supplier_name)
+    try:
+        items = parser(pdf_bytes)
+    except Exception as e:
+        raise RuntimeError(f"❌ Failed to parse supplier '{supplier_name}': {e}")
+
+    if not isinstance(items, list):
+        raise ValueError(f"Parser for '{supplier_name}' did not return a list.")
+
+    return items
 
 
-def detect_area(current_area: Optional[str], line: str) -> Optional[str]:
+# ---------------------------------------------------------------------
+# Fallback parser (if supplier not identified)
+# ---------------------------------------------------------------------
+def parse_generic_pdf(pdf_bytes: bytes) -> List[ItemRow]:
     """
-    Heuristically detects when a line represents an 'Area' heading
-    rather than an item line, and updates the current area.
+    A generic parser for PDFs with tabular layouts or plain text when supplier is unknown.
     """
-    if looks_like_table(line):
-        return current_area
+    items: List[ItemRow] = []
+    current_area = "General"
+    current_door = None
 
-    if re.search(
-        r"\b(Level|Ground|First|Second|Third|Basement|Mezzanine|Clubhouse|Club House|Floor|Wing|Block|Area)\b",
-        line,
-        re.I,
-    ):
-        return best_area_name(line)
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            lines = [normalize_spaces(l) for l in text.splitlines() if l.strip()]
 
-    return current_area
+            for line in lines:
+                # Try to detect area names (if your utils.best_area_name handles this)
+                area_candidate = best_area_name(line)
+                if area_candidate:
+                    current_area = area_candidate
+                    continue
+
+                # Detect door
+                door_match = DOOR_RE.search(line)
+                if door_match:
+                    current_door = door_match.group(1).upper()
+                    continue
+
+                # Detect code and quantity pattern (simple fallback)
+                match = re.match(r"^([A-Z0-9/.-]+)\s+(.+?)\s+(\d+)\s*$", line)
+                if match and current_door:
+                    code, desc, qty = match.groups()
+                    items.append(
+                        ItemRow(
+                            area=current_area,
+                            door=current_door,
+                            code=code.strip(),
+                            description=desc.strip(),
+                            colour=None,
+                            quantity=int(qty),
+                            product=desc.strip(),
+                        )
+                    )
+    return items
+
+
+# ---------------------------------------------------------------------
+# Entry point utility
+# ---------------------------------------------------------------------
+def extract_items_from_pdf(pdf_bytes: bytes, supplier: Optional[str] = None, force_ocr: bool = False) -> List[ItemRow]:
+    """
+    Top-level function that selects the correct parser or uses a generic fallback.
+    """
+    if supplier:
+        return parse_with_supplier(supplier, pdf_bytes)
+    else:
+        # fallback if supplier not specified or unknown
+        return parse_generic_pdf(pdf_bytes)
