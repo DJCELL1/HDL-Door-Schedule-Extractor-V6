@@ -12,8 +12,7 @@ class ItemRow:
     description: Optional[str] = None
     colour: Optional[str] = None
 
-DOOR_RE = re.compile(r"""
-    (?xi)
+DOOR_RE = re.compile(r"""(?xi)
     \b(
         [A-Z]{1,4}      # letters
         (?:\d{2,4})     # digits
@@ -22,3 +21,4 @@ DOOR_RE = re.compile(r"""
         (?:[A-Z])?      # optional extra suffix
     )\b
 """)
+
