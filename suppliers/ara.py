@@ -3,14 +3,16 @@ from typing import List
 from models import ItemRow, DOOR_RE
 import re
 
-ARA_DOOR_RE = re.compile(r"""(?xi)
-\b(
-  (?:ED|IBF|ID|IDS|IDW|IFD|IS)   # prefixes provided
-  \d{2,3}                       # digits
-  (?:[A-Z])?                     # optional letter suffix
-  (?:-\d+|-[A-Z])?              # optional -E / -B etc
-)\b
-""")
+ARA_DOOR_RE = re.compile(
+    r"""(?xi)
+    \b
+    (?:ED|IBF|ID|IDS|IDW|IFD|IS)   # ARA door families
+    \d{2,6}                        # numbers: ED01, ED0202, ID11, etc.
+    (?:-[A-Z]|[A-Z])?              # optional -E / -B or trailing A/B
+    \b
+    """
+)
+
 
 class ARAParser:
     name = "ara"
