@@ -3,7 +3,10 @@ from typing import List, Optional, Type
 from suppliers.base import SupplierBase
 from suppliers.allegion import AllegionParser
 from suppliers.dormakaba import DormakabaParser
-from suppliers.ara import ARAParser
+from suppliers import ARA
+
+registry["ARA"] = ARA.extract_items
+
 from suppliers.jk import JKParser
 
 PARSERS = [ARAParser, AllegionParser, DormakabaParser, JKParser]
